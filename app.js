@@ -1,68 +1,87 @@
-// ✅ Step 1: Import packages
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
 require('dotenv').config();
 
-
-
-// ✅ Step 2: Create the Express app
 const app = express();
 app.use(cors());
 
-// ✅ Step 3: Configure PostgreSQL connection
 const pool = mysql.createPool({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    port: process.env.DB_PORT
-  }).promise();
-  
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT
+}).promise();
 
-// ✅ Constants
-const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+const WEEKLY_WORKOUT_PLAN = {
+  Monday: { label: 'Chest & Triceps', categories: ['Chest', 'Arms'] },
+  Tuesday: { label: 'Back & Biceps', categories: ['Back', 'Arms'] },
+  Wednesday: { label: 'Legs & Shoulders', categories: ['Legs', 'Shoulders'] },
+  Thursday: { label: 'Core & Functional', categories: ['Core', 'Cardio'] },
+  Friday: { label: 'Full-Body', categories: ['Full Body'] },
+};
 
-// ✅ Route: GET /weekly-schedule
 app.get('/weekly-schedule', async (req, res) => {
   try {
-    // 🎯 Get distinct categories from workouts
-    const [result] = await pool.query('SELECT DISTINCT category FROM workouts');
-    const categories = result.map(row => row.category);
+    const [metaRows] = await pool.query('SELECT * FROM program_metadata WHERE status = 1 LIMIT 1');
+    let startDate, endDate;
+    const today = new Date();
 
-    // 🚨 Ensure we have enough categories to assign one per day
-    if (categories.length < 5) {
-      return res.status(400).json({ error: 'Not enough categories in the database.' });
+    if (metaRows.length === 0 || new Date(metaRows[0].end_date) < today) {
+      await pool.query('UPDATE program_metadata SET status = 0 WHERE status = 1');
+
+      const newStart = today;
+      const newEnd = new Date();
+      newEnd.setDate(newStart.getDate() + 7);
+
+      await pool.query(
+        'INSERT INTO program_metadata (start_date, end_date, status) VALUES (?, ?, 1)',
+        [newStart.toISOString().split('T')[0], newEnd.toISOString().split('T')[0]]
+      );
+
+      startDate = newStart;
+      endDate = newEnd;
+    } else {
+      startDate = new Date(metaRows[0].start_date);
+      endDate = new Date(metaRows[0].end_date);
     }
-
-    // 🔀 Shuffle and pick 5 categories
-    const shuffled = categories.sort(() => 0.5 - Math.random()).slice(0, 5);
 
     const schedule = [];
 
-    for (let i = 0; i < 5; i++) {
-      const category = shuffled[i];
+    for (const [day, { label, categories }] of Object.entries(WEEKLY_WORKOUT_PLAN)) {
+      let combinedWorkouts = [];
+      const itemsPerCategory = categories.length === 1 ? 6 : 3;
 
-      // 🎲 Fetch 6 random workouts from this category
-      const [workoutsRes] = await pool.query(
-        'SELECT name FROM workouts WHERE category = ? ORDER BY RAND() LIMIT 6',
-        [category]
-      );
+      for (const cat of categories) {
+        const [results] = await pool.query(
+          'SELECT name FROM workouts WHERE category = ? ORDER BY RAND() LIMIT ?',
+          [cat, itemsPerCategory]
+        );
+        combinedWorkouts = combinedWorkouts.concat(results.map(row => row.name));
+      }
 
       schedule.push({
-        day: DAYS[i],
-        category,
-        workouts: workoutsRes.map(row => row.name),
+        day,
+        category: label,
+        workouts: combinedWorkouts,
       });
     }
 
-    // 📤 Send JSON response
-    res.json(schedule);
+    res.json({
+      program_start: startDate.toISOString().split('T')[0],
+      expires_on: endDate.toISOString().split('T')[0],
+      schedule,
+    });
   } catch (error) {
-    console.error('🔥 ERROR:', error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('🔥 Weekly Schedule Error:', error.message);
+    if (process.env.NODE_ENV === 'development') console.error(error.stack);
+
+    res.status(500).json({
+      error: 'Failed to generate weekly schedule. Please try again later.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
-// ✅ Export the app for use in index.js
 module.exports = app;
