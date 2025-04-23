@@ -25,7 +25,7 @@ const WEEKLY_WORKOUT_PLAN = {
 app.get('/weekly-schedule', async (req, res) => {
   try {
     const [metaRows] = await pool.query('SELECT * FROM program_metadata WHERE status = 1 LIMIT 1');
-    let startDate, endDate;
+    let startDate, endDate, programId;
     const today = new Date();
 
     if (metaRows.length === 0 || new Date(metaRows[0].end_date) < today) {
@@ -35,44 +35,63 @@ app.get('/weekly-schedule', async (req, res) => {
       const newEnd = new Date();
       newEnd.setDate(newStart.getDate() + 7);
 
-      await pool.query(
+      const [insertResult] = await pool.query(
         'INSERT INTO program_metadata (start_date, end_date, status) VALUES (?, ?, 1)',
         [newStart.toISOString().split('T')[0], newEnd.toISOString().split('T')[0]]
       );
 
+      programId = insertResult.insertId;
       startDate = newStart;
       endDate = newEnd;
+
+      for (const [day, { label, categories }] of Object.entries(WEEKLY_WORKOUT_PLAN)) {
+        const itemsPerCategory = categories.length === 1 ? 6 : 3;
+        for (const cat of categories) {
+          const [results] = await pool.query(
+            'SELECT name FROM workouts WHERE category = ? ORDER BY RAND() LIMIT ?',
+            [cat, itemsPerCategory]
+          );
+
+          for (const row of results) {
+            console.log(`📝 Inserting workout: ${row.name} → ${day} (${label})`);
+            try {
+              await pool.query(
+                'INSERT INTO program_schedule (program_id, day, category, workout) VALUES (?, ?, ?, ?)',
+                [programId, day, label, row.name]
+              );
+            } catch (err) {
+              console.error('🔥 Failed to insert workout:', row.name, err.message);
+            }
+          }
+        }
+      }
     } else {
+      programId = metaRows[0].id;
       startDate = new Date(metaRows[0].start_date);
       endDate = new Date(metaRows[0].end_date);
     }
 
-    const schedule = [];
+    const [scheduleRows] = await pool.query(
+      'SELECT day, category, workout FROM program_schedule WHERE program_id = ?',
+      [programId]
+    );
 
-    for (const [day, { label, categories }] of Object.entries(WEEKLY_WORKOUT_PLAN)) {
-      let combinedWorkouts = [];
-      const itemsPerCategory = categories.length === 1 ? 6 : 3;
+    const groupedSchedule = Object.entries(WEEKLY_WORKOUT_PLAN).map(([day]) => {
+      const workouts = scheduleRows
+        .filter(row => row.day === day)
+        .map(row => row.workout);
+      const category = scheduleRows.find(row => row.day === day)?.category || '';
 
-      for (const cat of categories) {
-        const [results] = await pool.query(
-          'SELECT name FROM workouts WHERE category = ? ORDER BY RAND() LIMIT ?',
-          [cat, itemsPerCategory]
-        );
-        combinedWorkouts = combinedWorkouts.concat(results.map(row => row.name));
-      }
-
-      schedule.push({
-        day,
-        category: label,
-        workouts: combinedWorkouts,
-      });
-    }
+      return { day, category, workouts };
+    });
 
     res.json({
+      program_id: programId,
       program_start: startDate.toISOString().split('T')[0],
       expires_on: endDate.toISOString().split('T')[0],
-      schedule,
+      schedule: groupedSchedule,
     });
+
   } catch (error) {
     console.error('🔥 Weekly Schedule Error:', error.message);
     if (process.env.NODE_ENV === 'development') console.error(error.stack);
