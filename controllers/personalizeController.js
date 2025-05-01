@@ -1,5 +1,5 @@
 // controllers/personalizeController.js
-const pool = require('../db');
+const pool    = require('../db');
 const { OpenAI } = require('openai');
 require('dotenv').config();
 
@@ -7,109 +7,147 @@ if (!process.env.OPENAI_API_KEY) {
   console.error('❌ Missing OPENAI_API_KEY in .env');
   process.exit(1);
 }
-
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 exports.personalizePlan = async (req, res) => {
   const { userId } = req.body;
-  console.log('🔑 personalizePlan called for userId=', userId);
-
   if (!userId) {
-    console.warn('⚠️ Missing userId');
     return res.status(400).json({ error: 'Missing userId in body' });
   }
 
   try {
-    // 1) Fetch user profile
+    // 1) profile
     const [userRows] = await pool.query(
       `SELECT birthday, height, height_unit, weight, weight_unit, background
-       FROM user_profile
-       WHERE id = ?`,
+         FROM user_profile WHERE id = ?`,
       [userId]
     );
-    if (userRows.length === 0) {
-      console.warn(`⚠️ No profile found for userId=${userId}`);
+    if (!userRows.length) {
       return res.status(404).json({ error: 'User not found' });
     }
     const profile = userRows[0];
-    console.log('👤 profile:', profile);
 
-    // 2) Fetch active program id
+    // 2) programId
     const [metaRows] = await pool.query(
       'SELECT id FROM program_metadata WHERE status = 1 LIMIT 1'
     );
-    if (metaRows.length === 0) {
-      console.error('❌ No active program_metadata found');
+    if (!metaRows.length) {
       return res.status(500).json({ error: 'No active program found' });
     }
     const programId = metaRows[0].id;
-    console.log('📆 using programId=', programId);
 
-    // 3) Fetch schedule rows
+    // 3) cache check
+    const [cached] = await pool.query(
+      `SELECT day, workout_id, sets, reps, weight_value, weight_unit
+         FROM user_program_schedule
+        WHERE user_id = ? AND program_id = ?`,
+      [userId, programId]
+    );
+    if (cached.length) {
+      const personalized = cached.reduce((acc, row) => {
+        acc[row.day] = acc[row.day] || [];
+        acc[row.day].push({
+          workout_id:   row.workout_id,
+          sets:         row.sets,
+          reps:         row.reps,
+          weight_value: row.weight_value,
+          weight_unit:  row.weight_unit
+        });
+        return acc;
+      }, {});
+      return res.json({ program_id: programId, personalized });
+    }
+
+    // 4) scheduleRows
     const [scheduleRows] = await pool.query(
       `SELECT ps.day, ps.workout_id, w.name AS workout, w.category, w.type
-       FROM program_schedule ps
-       JOIN workouts w ON ps.workout_id = w.id
-       WHERE ps.program_id = ?`,
+         FROM program_schedule ps
+         JOIN workouts w ON ps.workout_id = w.id
+        WHERE ps.program_id = ?`,
       [programId]
     );
-    console.log('📋 scheduleRows count=', scheduleRows.length);
 
-    // 4) Build prompt messages
+    // 5) minimal prompt payload
+    const birth = new Date(profile.birthday);
+    const age   = Math.floor((Date.now() - birth) / (1000*60*60*24*365));
+
+    const minimal = {
+      profile: {
+        age,
+        height: profile.height,
+        weight: profile.weight,
+        background: profile.background
+      },
+      workouts: scheduleRows.map(r => ({
+        id:       r.workout_id,
+        name:     r.workout,
+        category: r.category
+      }))
+    };
+
     const messages = [
       {
         role: 'system',
         content: `
-You are a fitness coach.
-User profile: age from ${profile.birthday},
- height ${profile.height}${profile.height_unit},
- weight ${profile.weight}${profile.weight_unit},
- background: ${profile.background}.
-Weekly plan is an array of { day, workout_id, workout, category, type }.
-For each entry, return JSON with sets, reps, and weight, including workout_id.
-Output an object mapping days to arrays of { workout_id, sets, reps, weight }.
-`
+You are a fitness coach.  
+Given:
+  • profile: { age, height, weight, background }  
+  • workouts: array of { id, name, category }  
+For each workout return EXACTLY valid JSON:
+{
+  "Monday": [
+    { "id":1, "sets":3, "reps":12, "weight_value":50, "weight_unit":"kg", "distance_value":0, "distance_unit":"km" duration_value":0, "duration_unit":"min" }
+    …
+  ],
+  "Tuesday": [ … ],
+  …
+}
+Output **only** that JSON object, no extra text.`
       },
-      {
-        role: 'user',
-        content: JSON.stringify({ weekly_schedule: scheduleRows })
-      }
+      { role: 'user', content: JSON.stringify(minimal) }
     ];
 
-    console.log('🤖 sending prompt to OpenAI…');
-
-    // 5) Call OpenAI
+    // 6) call OpenAI with more tokens
     const completion = await openai.chat.completions.create({
       model:       'gpt-3.5-turbo',
       messages,
-      temperature: 0.7,
-      max_tokens:  800
+      temperature: 0.0,
+      max_tokens:  2000
     });
 
     const text = completion.choices[0].message.content.trim();
-    console.log('📨 OpenAI response:', text);
+    console.log(`📨 OpenAI raw response (${text.length} chars):\n`, text);
 
-    // 6) Parse and persist
+    // 7) try parse, with a simple fallback
     let personalized;
     try {
       personalized = JSON.parse(text);
-    } catch (e) {
-      console.error('❌ JSON.parse error:', e.message);
-      return res.status(500).json({
-        error: 'Invalid JSON from OpenAI',
-        raw: text
-      });
+    } catch (err) {
+      console.warn('❗ JSON.parse failed:', err.message);
+      // fallback: try to strip any trailing commas and ensure braces close
+      let guess = text
+        .replace(/,\s*]/g, ']')  // remove trailing commas before array close
+        .replace(/,\s*}/g, '}'); // remove trailing commas before object close
+      // ensure top‐level braces
+      if (!guess.startsWith('{')) guess = `{${guess}`;
+      if (!guess.endsWith('}'))   guess = `${guess}}`;
+
+      try {
+        personalized = JSON.parse(guess);
+        console.log('✅ JSON.parse succeeded after cleanup');
+      } catch (err2) {
+        console.error('❌ Fallback parse also failed:', err2.message);
+        return res.status(500).json({
+          error: 'Invalid JSON from OpenAI',
+          raw: text
+        });
+      }
     }
 
-    console.log('💾 Saving personalized schedule to user_program_schedule…');
+    // 8) persist
     for (const [day, exercises] of Object.entries(personalized)) {
       for (const ex of exercises) {
-        const { workout_id, sets, reps, weight } = ex;
-        // split weight into value/unit
-        const match = /^(\d+(?:\.\d+)?)(\D+)$/.exec(weight);
-        const weight_value = match ? parseFloat(match[1]) : null;
-        const weight_unit  = match ? match[2] : weight;
-
+        const { id: workout_id, sets, reps, weight_value, weight_unit } = ex;
         try {
           await pool.query(
             `INSERT INTO user_program_schedule
@@ -117,14 +155,13 @@ Output an object mapping days to arrays of { workout_id, sets, reps, weight }.
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [userId, programId, day, workout_id, sets, reps, weight_value, weight_unit]
           );
-        } catch (err) {
-          console.error(`❌ Insert failed for day=${day}, workout_id=${workout_id}:`, err.message);
+        } catch (e) {
+          console.error(`❌ DB insert failed for ${day} / workout ${workout_id}:`, e.message);
         }
       }
     }
 
-    // 7) Return final JSON
-    console.log('✅ personalizePlan complete');
+    // 9) return
     res.json({ program_id: programId, personalized });
 
   } catch (err) {
