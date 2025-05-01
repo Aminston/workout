@@ -1,20 +1,11 @@
-// routes/userProfile.js
 const express = require('express');
-const {
-  createOrUpdateUserProfile,
-  getUserProfile,
-  updateUserProfile
-} = require('../controllers/userProfileController');
-
+const { createUserProfile, getUserProfile } = require('../controllers/userProfileController');
 const router = express.Router();
 
-// Create or upsert a profile, returns user_id
-router.post('/user-profile', createOrUpdateUserProfile);
+// 1️⃣ Create new profile → returns { userId }
+router.post('/user-profile', createUserProfile);
 
-// Fetch a profile by user_id
-router.get('/user-profile/:user_id', getUserProfile);
-
-// Update an existing profile
-router.put('/user-profile/:user_id', updateUserProfile);
+// 2️⃣ Fetch profile by numeric ID
+router.get('/user-profile/:userId', getUserProfile);
 
 module.exports = router;
