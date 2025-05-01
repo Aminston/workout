@@ -1,6 +1,5 @@
-// ✅ index.js: starts the server
+// index.js — your entry point
 const app = require('./app');
-
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
