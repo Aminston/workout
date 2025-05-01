@@ -1,16 +1,18 @@
 // app.js
-const express = require('express');
-const cors    = require('cors');
-
-const userProfileRoutes = require('./routes/userProfile');
-const pool              = require('./db');                     // <— grab the pool here
+require('dotenv').config();
+const express             = require('express');
+const cors                = require('cors');
+const pool                = require('./db');               // your MySQL pool
+const userProfileRoutes   = require('./routes/userProfile');
+const personalizeRoutes   = require('./routes/personalize');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// mount your profile routes under /api
+// Mount them under /api
 app.use('/api', userProfileRoutes);
+app.use('/api', personalizeRoutes);
 
 module.exports = app;
 
