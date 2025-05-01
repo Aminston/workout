@@ -1,22 +1,18 @@
-// ✅ app.js — defines your Express app and routes
-
+// app.js
 const express = require('express');
 const cors    = require('cors');
-const mysql   = require('mysql2');
-require('dotenv').config();
+
+const userProfileRoutes = require('./routes/userProfile');
+const pool              = require('./db');                     // <— grab the pool here
 
 const app = express();
 app.use(cors());
-app.use(express.json());  // in case you add POST routes later
+app.use(express.json());
 
-// → MySQL connection pool
-const pool = mysql.createPool({
-  host:     process.env.DB_HOST,
-  user:     process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port:     process.env.DB_PORT
-}).promise();
+// mount your profile routes under /api
+app.use('/api', userProfileRoutes);
+
+module.exports = app;
 
 // → Your 5-day plan definition
 const WEEKLY_WORKOUT_PLAN = {
