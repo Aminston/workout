@@ -1,7 +1,5 @@
-// routes/userProfile.js
-
-const express            = require('express');
-const requireApiToken    = require('../middleware/requireApiToken');
+const express         = require('express');
+const requireApiToken = require('../middleware/requireApiToken');
 const {
   createUserProfile,
   getUserProfile,
@@ -10,11 +8,13 @@ const {
 
 const router = express.Router();
 
-// 1) Public signup (no token needed)
-router.post('/user-profile', createUserProfile);
+// Create profile (public)
+router.post('/', createUserProfile);
 
-// 2) Protected: fetch & update (token in header or ?token=…)
-router.get('/user-profile',    requireApiToken, getUserProfile);
-router.put('/user-profile',    requireApiToken, updateUserProfile);
+// Get own profile (protected)
+router.get('/', requireApiToken, getUserProfile);
+
+// Update own profile (protected)
+router.put('/', requireApiToken, updateUserProfile);
 
 module.exports = router;
