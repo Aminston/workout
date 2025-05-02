@@ -1,36 +1,47 @@
 // controllers/userProfileController.js
 
-const pool = require('../db');
+const pool   = require('../db');
+const crypto = require('crypto');
 
-// 1) Create a brand‐new profile
+// 1) Create a brand-new profile (and return an API token)
 exports.createUserProfile = async (req, res) => {
   const {
-    name,
-    email,
-    birthday,
-    height,
-    height_unit,
-    weight,
-    weight_unit,
+    name, email, birthday,
+    height, height_unit,
+    weight, weight_unit,
     background
   } = req.body;
 
-  // Validate
-  if (!name || !email || !birthday || !height || !height_unit || !weight || !weight_unit) {
+  // Validate required fields
+  if (!name || !email || !birthday ||
+      !height || !height_unit ||
+      !weight || !weight_unit) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
   try {
+    // Generate & hash token
+    const token     = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    // Insert user + tokenHash
     const [result] = await pool.query(
       `INSERT INTO user_profile
-         (name, email, birthday, height, height_unit, weight, weight_unit, background)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [name, email, birthday, height, height_unit, weight, weight_unit, background]
+         (name, email, birthday,
+          height, height_unit,
+          weight, weight_unit,
+          background, api_token_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name, email, birthday,
+       height, height_unit,
+       weight, weight_unit,
+       background, tokenHash]
     );
 
     return res.status(201).json({
-      message: 'Profile created successfully',
-      userId: result.insertId
+      message:  'Profile created successfully',
+      userId:   result.insertId,
+      apiToken: token
     });
   } catch (err) {
     console.error('🔥 Error inserting user profile:', err);
@@ -41,9 +52,9 @@ exports.createUserProfile = async (req, res) => {
   }
 };
 
-// 2) Get a profile by numeric ID
+// 2) Get your own profile (requires valid token)
 exports.getUserProfile = async (req, res) => {
-  const userId = req.params.userId;
+  const userId = req.userId;
   try {
     const [rows] = await pool.query(
       `SELECT
@@ -70,26 +81,28 @@ exports.getUserProfile = async (req, res) => {
   }
 };
 
-// 3) Update an existing profile
+// 3) Update your own profile (requires valid token)
 exports.updateUserProfile = async (req, res) => {
-  const userId = req.params.userId;
+  const userId = req.userId;
   const {
-    name,
-    email,
-    birthday,
-    height,
-    height_unit,
-    weight,
-    weight_unit,
+    name, email, birthday,
+    height, height_unit,
+    weight, weight_unit,
     background
   } = req.body;
 
   try {
     const [result] = await pool.query(
       `UPDATE user_profile
-         SET name=?, email=?, birthday=?, height=?, height_unit=?, weight=?, weight_unit=?, background=?
+         SET name=?, email=?, birthday=?,
+             height=?, height_unit=?,
+             weight=?, weight_unit=?,
+             background=?
        WHERE id = ?`,
-      [name, email, birthday, height, height_unit, weight, weight_unit, background, userId]
+      [ name, email, birthday,
+        height, height_unit,
+        weight, weight_unit,
+        background, userId ]
     );
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'User not found to update' });
