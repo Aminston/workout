@@ -1,23 +1,21 @@
 // app.js
 require('dotenv').config();
-const express     = require('express');
-const cors        = require('cors');
+const express = require('express');
+const cors = require('cors');
 
 const userProfile = require('./routes/userProfile');
 const aiRoutes    = require('./routes/ai');
 const schedule    = require('./routes/schedule');
+const authRoutes  = require('./routes/auth'); // ✅ load auth route
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Your personalized-OpenAI API
+// ✅ Mount this BEFORE module.exports
+app.use('/api/auth', authRoutes);
 app.use('/api/personalize', aiRoutes);
-
-// User profiles (if you have them)
 app.use('/api/user-profile', userProfile);
-
-// Public schedule endpoint
-app.use('/', schedule);
+app.use('/', schedule); // ← this should stay last
 
 module.exports = app;

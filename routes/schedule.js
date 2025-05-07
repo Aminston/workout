@@ -1,10 +1,9 @@
-// routes/schedule.js
-const express               = require('express');
+const express = require('express');
 const { getWeeklySchedule } = require('../controllers/scheduleController');
+const authenticate = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /weekly-schedule
-router.get('/weekly-schedule', getWeeklySchedule);
+router.get('/schedule', authenticate, getWeeklySchedule); // ✅ token optional
 
 module.exports = router;

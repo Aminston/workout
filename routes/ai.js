@@ -1,11 +1,9 @@
-// routes/ai.js
-const express             = require('express');
-const requireApiToken     = require('../middleware/requireApiToken');
-const { personalizePlan } = require('../controllers/openaiController');
-
+const express = require('express');
 const router = express.Router();
+const aiController = require('../controllers/openaiController');
+const authenticate = require('../middleware/auth');
 
-// POST /api/personalize
-router.post('/', requireApiToken, personalizePlan);
+router.post('/plan', authenticate, aiController.personalizePlan);
+router.delete('/reset', authenticate, aiController.resetPersonalizedPlan);
 
 module.exports = router;

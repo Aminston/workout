@@ -1,176 +1,192 @@
-// controllers/openaiController.js
-
 const pool = require('../db');
 const { OpenAI } = require('openai');
 require('dotenv').config();
 
-if (!process.env.OPENAI_API_KEY) {
-  console.error('Missing OPENAI_API_KEY in .env');
-  process.exit(1);
-}
-
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-exports.personalizePlan = async (req, res) => {
-  const userId = req.userId;  // set by requireApiToken
+async function personalizePlan(req, res) {
+  const userId = req.user?.userId;
   if (!userId) {
-    return res.status(401).json({ error: 'API token required' });
+    return res.status(401).json({ error: 'Unauthorized: token required' });
   }
 
+  const connection = await pool.getConnection();
   try {
-    // 1) Load user profile
-    const [userRows] = await pool.query(
-      `SELECT birthday, height, height_unit, weight, weight_unit, background
-         FROM user_profile WHERE id = ?`,
+    const [[userProfile]] = await connection.query(
+      `SELECT birthday, height, weight, background FROM user_profile WHERE id = ?`,
       [userId]
     );
-    if (!userRows.length) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    const profile = userRows[0];
+    if (!userProfile) return res.status(404).json({ error: 'User profile not found' });
 
-    // 2) Get active program
-    const [metaRows] = await pool.query(
+    const age = Math.floor((Date.now() - new Date(userProfile.birthday)) / (1000 * 60 * 60 * 24 * 365));
+
+    const [[programMeta]] = await connection.query(
       `SELECT id FROM program_metadata WHERE status = 1 LIMIT 1`
     );
-    if (!metaRows.length) {
-      return res.status(500).json({ error: 'No active program found' });
-    }
-    const programId = metaRows[0].id;
+    if (!programMeta) return res.status(500).json({ error: 'No active program found' });
 
-    // 3) Return cached schedule if it exists
-    const [cached] = await pool.query(
-      `SELECT day, workout_id, sets, reps, weight_value, weight_unit
-         FROM user_program_schedule
-        WHERE user_id = ? AND program_id = ?`,
+    const programId = programMeta.id;
+
+    const [existing] = await connection.query(
+      `SELECT 1 FROM user_program_schedule WHERE user_id = ? AND program_id = ? LIMIT 1`,
       [userId, programId]
     );
-    if (cached.length) {
-      const personalized = cached.reduce((acc, row) => {
-        acc[row.day] = acc[row.day] || [];
-        acc[row.day].push({
-          id:           row.workout_id,
-          sets:         row.sets,
-          reps:         row.reps,
-          weight_value: row.weight_value,
-          weight_unit:  row.weight_unit
-        });
-        return acc;
-      }, {});
-      return res.json({ program_id: programId, personalized });
+    if (existing.length) {
+      return res.status(400).json({
+        error: 'You already have a personalized workout plan. Please reset it before generating a new one.'
+      });
     }
 
-    // 4) Fetch base schedule
-    const [scheduleRows] = await pool.query(
-      `SELECT ps.day, ps.workout_id, w.name AS workout, w.category
-         FROM program_schedule ps
-         JOIN workouts w ON ps.workout_id = w.id
-        WHERE ps.program_id = ?`,
+    const [rows] = await connection.query(
+      `SELECT ps.day, ps.workout_id, w.name
+       FROM program_schedule ps
+       JOIN workouts w ON ps.workout_id = w.id
+       WHERE ps.program_id = ?
+       ORDER BY FIELD(ps.day, 'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'), ps.id`,
       [programId]
     );
 
-    // 5) Build the minimal prompt payload
-    const birth = new Date(profile.birthday);
-    const age = Math.floor((Date.now() - birth) / (1000 * 60 * 60 * 24 * 365));
-    const minimal = {
+    const workoutIdToDay = new Map();
+    const workoutList = [];
+
+    for (const row of rows) {
+      workoutIdToDay.set(row.workout_id, row.day);
+      workoutList.push({ id: row.workout_id, name: row.name });
+    }
+
+    const promptInput = {
       profile: {
         age,
-        height:     profile.height,
-        weight:     profile.weight,
-        background: profile.background
+        height: userProfile.height,
+        weight: userProfile.weight,
+        background: userProfile.background
       },
-      workouts: scheduleRows.map(r => ({
-        id:       r.workout_id,
-        name:     r.workout,
-        category: r.category
-      }))
+      workouts: workoutList
     };
 
-    // 6) Prepare OpenAI messages with strict JSON-only spec
     const messages = [
       {
         role: 'system',
         content: `
 You are a fitness coach.
-Given:
-  - profile: { age, height, weight, background }
-  - workouts: array of { id, name, category }
 
-Produce only valid JSON (no markdown, no explanation).
-Do NOT include any property other than:
-  - id           (number)
-  - sets         (number)
-  - reps         (number)
-  - weight_value (number)
-  - weight_unit  (string; "kg" or "lb")
+You will receive:
+- A user profile: { age, height, weight, background }
+- A list of workouts: [{ id, name }]
 
-Your output must be a single object with keys for each weekday (Monday…Sunday), each mapping to an array of exercises.
+Your task is to personalize each workout by returning:
+- id (copied from input)
+- sets (int)
+- reps (int)
+- weight_value (number)
+- weight_unit ("kg" or "lb")
 
-Example:
-\`\`\`json
-{
-  "Monday": [
-    {
-      "id": 1,
-      "sets": 3,
-      "reps": 12,
-      "weight_value": 50,
-      "weight_unit": "kg"
-    }
-  ],
-  "Tuesday": [],
-  "Wednesday": [],
-  "Thursday": [],
-  "Friday": [],
-  "Saturday": [],
-  "Sunday": []
-}
-\`\`\`
-`
+Return a flat JSON array. No nesting, no markdown, no explanations, no comments.
+        `.trim()
       },
-      { role: 'user', content: JSON.stringify(minimal) }
+      {
+        role: 'user',
+        content: JSON.stringify(promptInput)
+      }
     ];
 
-    // 7) Call OpenAI
     const completion = await openai.chat.completions.create({
-      model:       'gpt-3.5-turbo',
+      model: 'gpt-3.5-turbo',
       messages,
-      temperature: 0.0,
-      max_tokens:  2000
+      temperature: 0,
+      max_tokens: 2048
     });
-    const text = completion.choices[0].message.content.trim();
 
-    // 8) Parse JSON (with fallback cleanup)
-    let personalized;
+    const raw = completion.choices[0].message.content.trim();
+    let enriched;
     try {
-      personalized = JSON.parse(text);
-    } catch {
-      let guess = text
-        .replace(/,\s*]/g, ']')
-        .replace(/,\s*}/g, '}');
-      if (!guess.startsWith('{')) guess = `{${guess}`;
-      if (!guess.endsWith('}'))   guess = `${guess}}`;
-      personalized = JSON.parse(guess);
+      enriched = JSON.parse(raw);
+    } catch (err) {
+      console.error('OpenAI JSON parse error:', raw);
+      return res.status(500).json({ error: 'OpenAI returned invalid JSON' });
     }
 
-    // 9) Persist overrides
-    for (const [day, exercises] of Object.entries(personalized)) {
-      for (const ex of exercises) {
-        const { id: workout_id, sets, reps, weight_value, weight_unit } = ex;
-        await pool.query(
-          `INSERT INTO user_program_schedule
-             (user_id, program_id, day, workout_id, sets, reps, weight_value, weight_unit)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [userId, programId, day, workout_id, sets, reps, weight_value, weight_unit]
-        ).catch(e => console.error(`Insert failed for ${day}/${workout_id}:`, e.message));
+    const values = [];
+
+    for (const workout of enriched) {
+      const { id, sets, reps, weight_value, weight_unit } = workout;
+      const day = workoutIdToDay.get(id);
+      if (!day) continue;
+
+      if (
+        typeof sets !== 'number' ||
+        typeof reps !== 'number' ||
+        typeof weight_value !== 'number' ||
+        !['kg', 'lb'].includes(weight_unit)
+      ) {
+        return res.status(422).json({ error: `Invalid data format for workout id ${id}` });
       }
+
+      values.push([
+        userId,
+        programId,
+        day,
+        id,
+        sets,
+        reps,
+        weight_value,
+        weight_unit
+      ]);
     }
 
-    // 10) Respond
-    res.json({ program_id: programId, personalized });
+    if (values.length === 0) {
+      return res.status(400).json({ error: 'No valid workout data returned by OpenAI' });
+    }
+
+    await connection.beginTransaction();
+
+    await connection.query(
+      `INSERT INTO user_program_schedule
+       (user_id, program_id, day, workout_id, sets, reps, weight_value, weight_unit)
+       VALUES ?`,
+      [values]
+    );
+
+    await connection.commit();
+    res.json({ program_id: programId, personalized: enriched });
 
   } catch (err) {
-    console.error('Personalization Error:', err);
+    await connection.rollback();
+    console.error('Personalization error:', err);
     res.status(500).json({ error: 'Failed to personalize plan', details: err.message });
+  } finally {
+    connection.release();
   }
+}
+
+async function resetPersonalizedPlan(req, res) {
+  const userId = req.user?.userId;
+  if (!userId) {
+    return res.status(401).json({ error: 'Unauthorized: token required' });
+  }
+
+  try {
+    const [[meta]] = await pool.query(
+      `SELECT id FROM program_metadata WHERE status = 1 LIMIT 1`
+    );
+
+    if (!meta) {
+      return res.status(500).json({ error: 'No active program found' });
+    }
+
+    await pool.query(
+      `DELETE FROM user_program_schedule WHERE user_id = ? AND program_id = ?`,
+      [userId, meta.id]
+    );
+
+    res.json({ message: 'Your personalized workout plan has been reset.' });
+  } catch (err) {
+    console.error('Reset error:', err);
+    res.status(500).json({ error: 'Failed to reset workout plan', details: err.message });
+  }
+}
+
+module.exports = {
+  personalizePlan,
+  resetPersonalizedPlan
 };
