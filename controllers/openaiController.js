@@ -78,7 +78,7 @@ Your task is to personalize each workout by returning:
 - id (copied from input)
 - sets (int)
 - reps (int)
-- weight_value (number)
+- weight_value (number; use 0 if exercise uses bodyweight)
 - weight_unit ("kg" or "lb")
 
 Return a flat JSON array. No nesting, no markdown, no explanations, no comments.

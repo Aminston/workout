@@ -7,7 +7,7 @@ const authenticate = require('../middleware/auth');
 const router = express.Router();
 
 // ✅ Register
-router.post('/register', async (req, res) => {
+router.post('/register', async (req, res, next) => {
   const { name, email, password } = req.body;
 
   if (!name || !email || !password) {
@@ -26,6 +26,7 @@ router.post('/register', async (req, res) => {
 
     res.status(201).json({ token });
   } catch (err) {
+    next(err);
     console.error('REGISTRATION ERROR:', err);
     res.status(400).json({ error: err.message });
   }
@@ -59,6 +60,8 @@ router.post('/login', async (req, res) => {
 // ✅ Get profile of logged-in user
 router.get('/me', authenticate, async (req, res) => {
   try {
+    console.log('✅ req.user from JWT:', req.user);
+
     const [rows] = await db.query(
       `SELECT id, email, name, birthday, height, height_unit, weight, weight_unit, background
        FROM user_profile WHERE id = ?`,
