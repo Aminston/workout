@@ -13,7 +13,8 @@ async function personalizePlan(req, res) {
   const connection = await pool.getConnection();
   try {
     const [[userProfile]] = await connection.query(
-      `SELECT birthday, height, weight, background FROM user_profile WHERE id = ?`,
+      `SELECT birthday, height, weight, background, training_goal, training_experience, injury_caution_area
+       FROM user_profile WHERE id = ?`,
       [userId]
     );
     if (!userProfile) return res.status(404).json({ error: 'User profile not found' });
@@ -46,11 +47,14 @@ async function personalizePlan(req, res) {
       [programId]
     );
 
-    const workoutIdToDay = new Map();
+    const workoutIdToDays = new Map();
     const workoutList = [];
 
     for (const row of rows) {
-      workoutIdToDay.set(row.workout_id, row.day);
+      if (!workoutIdToDays.has(row.workout_id)) {
+        workoutIdToDays.set(row.workout_id, []);
+      }
+      workoutIdToDays.get(row.workout_id).push(row.day);
       workoutList.push({ id: row.workout_id, name: row.name });
     }
 
@@ -59,7 +63,10 @@ async function personalizePlan(req, res) {
         age,
         height: userProfile.height,
         weight: userProfile.weight,
-        background: userProfile.background
+        background: userProfile.background,
+        training_goal: userProfile.training_goal,
+        training_experience: userProfile.training_experience,
+        injury_caution_area: userProfile.injury_caution_area
       },
       workouts: workoutList
     };
@@ -70,18 +77,37 @@ async function personalizePlan(req, res) {
         content: `
 You are a fitness coach.
 
-You will receive:
-- A user profile: { age, height, weight, background }
-- A list of workouts: [{ id, name }]
+Your task is to personalize a list of workouts based on the user's profile and training goals.
 
-Your task is to personalize each workout by returning:
+You will receive:
+- A user profile:
+  {
+    age,
+    height,
+    weight,
+    background,
+    training_goal (muscle_gain | fat_loss | tone_up | improve_strength | general_fitness),
+    training_experience (beginner | casual | consistent | advanced),
+    injury_caution_area (none | shoulders | lower_back | knees | wrists | elbows | neck | ankles | hips)
+  }
+
+- A list of workouts:
+  [{ id, name }]
+
+Respond with a flat JSON array where each item includes:
 - id (copied from input)
 - sets (int)
 - reps (int)
-- weight_value (number; use 0 if exercise uses bodyweight)
+- weight_value (number; use 0 only if the exercise is strictly bodyweight)
 - weight_unit ("kg" or "lb")
 
-Return a flat JSON array. No nesting, no markdown, no explanations, no comments.
+Rules:
+1. Tailor sets, reps, and weight_value based on the user's training_goal and training_experience.
+2. If training_goal is "muscle_gain" or "improve_strength", assign meaningful non-zero weight_value for all exercises that use equipment.
+3. Only use weight_value: 0 for exercises that are strictly bodyweight-based (e.g., push-ups, planks). Do not assume any weighted exercise is bodyweight.
+4. Do not assign weight_value: 0 to any variation of bench press (including Close-Grip Bench Press), deadlift, row, squat, overhead press, or carry exercises. These always require external load.
+5. Adjust or skip exercises that could aggravate the injury_caution_area.
+6. Return only a valid flat JSON array. No formatting, markdown, headers, or extra text.
         `.trim()
       },
       {
@@ -107,31 +133,38 @@ Return a flat JSON array. No nesting, no markdown, no explanations, no comments.
     }
 
     const values = [];
+    const insertedPairs = new Set();
 
     for (const workout of enriched) {
       const { id, sets, reps, weight_value, weight_unit } = workout;
-      const day = workoutIdToDay.get(id);
-      if (!day) continue;
+      const days = workoutIdToDays.get(id);
+      if (!days) continue;
 
-      if (
-        typeof sets !== 'number' ||
-        typeof reps !== 'number' ||
-        typeof weight_value !== 'number' ||
-        !['kg', 'lb'].includes(weight_unit)
-      ) {
-        return res.status(422).json({ error: `Invalid data format for workout id ${id}` });
+      for (const day of days) {
+        const key = `${day}:${id}`;
+        if (insertedPairs.has(key)) continue;
+        insertedPairs.add(key);
+
+        if (
+          typeof sets !== 'number' ||
+          typeof reps !== 'number' ||
+          typeof weight_value !== 'number' ||
+          !['kg', 'lb'].includes(weight_unit)
+        ) {
+          return res.status(422).json({ error: `Invalid data format for workout id ${id}` });
+        }
+
+        values.push([
+          userId,
+          programId,
+          day,
+          id,
+          sets,
+          reps,
+          weight_value,
+          weight_unit
+        ]);
       }
-
-      values.push([
-        userId,
-        programId,
-        day,
-        id,
-        sets,
-        reps,
-        weight_value,
-        weight_unit
-      ]);
     }
 
     if (values.length === 0) {
