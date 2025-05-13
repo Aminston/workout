@@ -1,86 +1,98 @@
-const express = require('express');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const db = require('../db');
-const authenticate = require('../middleware/auth');
+// src/routes/auth.js
+
+import express from 'express';
+import bcrypt from 'bcryptjs';                // pure-JS fallback for easier installs
+import rateLimit from 'express-rate-limit';  // one import only
+import db from '../db.js';
+import authenticate from '../middleware/auth.js';
+import { asyncHandler } from '../middleware/errorHandler.js';
+import { signToken } from '../utils/jwt.js';
 
 const router = express.Router();
 
-// ✅ Register
-router.post('/register', async (req, res, next) => {
-  const { name, email, password } = req.body;
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'Name, email, and password are required' });
-  }
-
-  try {
-    const hashed = await bcrypt.hash(password, 10);
-    const result = await db.query(
-      `INSERT INTO user_profile (name, email, password) VALUES (?, ?, ?)`,
-      [name, email, hashed]
-    );
-
-    const userId = result.insertId;
-    const token = jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
-
-    res.status(201).json({ token });
-  } catch (err) {
-    next(err);
-    console.error('REGISTRATION ERROR:', err);
-    res.status(400).json({ error: err.message });
-  }
+// ─── Slow down brute-force login attempts ───────────────────────────────────────
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  message: { error: 'Too many login attempts, please try again later.' }
 });
 
-// ✅ Login
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
-  }
-
-  try {
-    const [rows] = await db.query(`SELECT * FROM user_profile WHERE email = ?`, [email]);
-    const user = rows[0];
-
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+// ─── POST /api/auth/register ───────────────────────────────────────────────────
+router.post(
+  '/register',
+  asyncHandler(async (req, res) => {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      res.status(400);
+      throw new Error('Name, email, and password are required');
     }
 
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    try {
+      const hashed = await bcrypt.hash(password, 10);
+      const result = await db.query(
+        `INSERT INTO user_profile (name, email, password) VALUES (?, ?, ?)`,
+        [name, email, hashed]
+      );
+      const userId = result.insertId;
+      const token  = signToken({ userId });
+      res.status(201).json({ token });
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+        res.status(400);
+        throw new Error('That email is already registered');
+      }
+      throw err;
+    }
+  })
+);
 
-    res.json({ token });
-  } catch (err) {
-    console.error('LOGIN ERROR:', err);
-    res.status(500).json({ error: 'Login failed', details: err.message });
-  }
-});
-
-// ✅ Get profile of logged-in user
-router.get('/me', authenticate, async (req, res) => {
-  try {
-    console.log('✅ req.user from JWT:', req.user);
+// ─── POST /api/auth/login ──────────────────────────────────────────────────────
+router.post(
+  '/login',
+  loginLimiter,
+  asyncHandler(async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      res.status(400);
+      throw new Error('Email and password are required');
+    }
 
     const [rows] = await db.query(
-      `SELECT id, email, name, birthday, height, height_unit, weight, weight_unit, background
-       FROM user_profile WHERE id = ?`,
+      `SELECT id, password FROM user_profile WHERE email = ?`,
+      [email]
+    );
+    const user = rows[0];
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      res.status(401);
+      throw new Error('Invalid credentials');
+    }
+
+    const token = signToken({ userId: user.id });
+    res.json({ token });
+  })
+);
+
+// ─── GET /api/auth/me ─────────────────────────────────────────────────────────
+router.get(
+  '/me',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const [rows] = await db.query(
+      `SELECT 
+         id, email, name, birthday, height, height_unit,
+         weight, weight_unit, background,
+         training_goal, training_experience, injury_caution_area
+       FROM user_profile
+       WHERE id = ?`,
       [req.user.userId]
     );
-
     const user = rows[0];
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
+    if (!user) {
+      res.status(404);
+      throw new Error('User not found');
+    }
     res.json(user);
-  } catch (err) {
-    console.error('ME ROUTE ERROR:', err);
-    res.status(500).json({ error: 'Something went wrong', details: err.message });
-  }
-});
+  })
+);
 
-// ✅ Logout (stateless)
-router.post('/logout', authenticate, (req, res) => {
-  res.json({ message: 'Logged out successfully — token should be removed client-side' });
-});
-
-module.exports = router;
+export default router;

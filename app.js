@@ -1,21 +1,24 @@
 // app.js
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
 
-const userProfile = require('./routes/userProfile');
-const aiRoutes    = require('./routes/ai');
-const schedule    = require('./routes/schedule');
-const authRoutes  = require('./routes/auth'); // ✅ load auth route
+import authRoutes        from './routes/auth.js';
+import aiRoutes          from './routes/ai.js';
+import userProfileRoutes from './routes/userProfile.js';
+import scheduleRoutes    from './routes/schedule.js';
+import { errorHandler }  from './middleware/errorHandler.js';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Mount this BEFORE module.exports
 app.use('/api/auth', authRoutes);
 app.use('/api/personalize', aiRoutes);
-app.use('/api/user-profile', userProfile);
-app.use('/', schedule); // ← this should stay last
+app.use('/api/user-profile', userProfileRoutes);
+app.use('/', scheduleRoutes);
 
-module.exports = app;
+app.use((req, res) => res.status(404).json({ error: 'Not Found' }));
+app.use(errorHandler);
+
+export default app;

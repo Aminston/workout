@@ -1,10 +1,27 @@
-const express = require('express');
+// src/routes/ai.js
+
+import express from 'express';
+import authenticate from '../middleware/auth.js';
+import { asyncHandler } from '../middleware/errorHandler.js';
+import {
+  personalizePlan,
+  resetPersonalizedPlan
+} from '../controllers/openaiController.js';
+
 const router = express.Router();
-const aiController = require('../controllers/openaiController');
-const authenticate = require('../middleware/auth');
 
-// ✅ These will now both work
-router.post('/plan', authenticate, aiController.personalizePlan);
-router.delete('/reset', authenticate, aiController.resetPersonalizedPlan);
+// POST /api/personalize/plan - generate a personalized workout plan
+router.post(
+  '/plan',
+  authenticate,
+  asyncHandler(personalizePlan)
+);
 
-module.exports = router;
+// DELETE /api/personalize/reset - reset the personalized plan
+router.delete(
+  '/reset',
+  authenticate,
+  asyncHandler(resetPersonalizedPlan)
+);
+
+export default router;

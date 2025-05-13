@@ -1,13 +1,16 @@
-const express = require('express');
-const authenticate = require('../middleware/auth');
-const { updateUserProfile, getUserProfile } = require('../controllers/userProfileController');
+// src/routes/userProfile.js
+
+import express from 'express';
+import authenticate from '../middleware/auth.js';
+import { asyncHandler } from '../middleware/errorHandler.js';
+import { getUserProfile, updateUserProfile } from '../controllers/userProfileController.js';
 
 const router = express.Router();
 
-// ✅ Get current user profile
-router.get('/', authenticate, getUserProfile);
+// GET /api/user-profile - fetch current user's profile
+router.get('/', authenticate, asyncHandler(getUserProfile));
 
-// ✅ Update user profile
-router.put('/', authenticate, updateUserProfile);
+// PUT /api/user-profile - update current user's profile
+router.put('/', authenticate, asyncHandler(updateUserProfile));
 
-module.exports = router;
+export default router;

@@ -1,14 +1,21 @@
-const pool = require('../db');
+// src/controllers/scheduleController.js
 
-const WEEKLY_WORKOUT_PLAN = {
-  Monday:    { label: 'Chest & Triceps',  categories: ['Chest','Arms']    },
-  Tuesday:   { label: 'Back & Biceps',    categories: ['Back','Arms']     },
-  Wednesday: { label: 'Legs & Shoulders', categories: ['Legs','Shoulders']},
-  Thursday:  { label: 'Core & Functional',categories: ['Core','Cardio']   },
-  Friday:    { label: 'Full-Body',        categories: ['Full Body']       },
+import pool from '../db.js';
+
+export const WEEKLY_WORKOUT_PLAN = {
+  Monday:    { label: 'Chest & Triceps',   categories: ['Chest', 'Arms']      },
+  Tuesday:   { label: 'Back & Biceps',     categories: ['Back', 'Arms']       },
+  Wednesday: { label: 'Legs & Shoulders',  categories: ['Legs', 'Shoulders']  },
+  Thursday:  { label: 'Core & Functional', categories: ['Core', 'Cardio']     },
+  Friday:    { label: 'Full-Body',         categories: ['Full Body']          },
 };
 
-exports.getWeeklySchedule = async (req, res) => {
+/**
+ * GET /api/schedule
+ * Returns the current 7-day program (creating a new one if needed),
+ * then merges any user-specific overrides.
+ */
+export async function getWeeklySchedule(req, res) {
   const userId = req.user?.userId || null;
   const today = new Date();
   let userName = null;
@@ -22,8 +29,10 @@ exports.getWeeklySchedule = async (req, res) => {
     let programId, startDate, endDate;
 
     if (!metaRows.length || new Date(metaRows[0].end_date) < today) {
+      // expire old program
       await pool.query('UPDATE program_metadata SET status = 0 WHERE status = 1');
 
+      // set up new window
       startDate = today;
       endDate = new Date(today);
       endDate.setDate(today.getDate() + 7);
@@ -35,11 +44,12 @@ exports.getWeeklySchedule = async (req, res) => {
           endDate.toISOString().split('T')[0]
         ]
       );
-
       programId = ins.insertId;
 
+      // populate schedule
       for (const [day, { categories }] of Object.entries(WEEKLY_WORKOUT_PLAN)) {
-        const isSpecial = ['Core', 'Cardio', 'Full Body'].some(c => categories.includes(c));
+        const isSpecial = ['Core', 'Cardio', 'Full Body']
+          .some(c => categories.includes(c));
 
         for (const cat of categories) {
           let workoutIds = [];
@@ -70,15 +80,15 @@ exports.getWeeklySchedule = async (req, res) => {
           }
         }
       }
-
     } else {
+      // reuse existing
       programId = metaRows[0].id;
       startDate = new Date(metaRows[0].start_date);
-      endDate   = new Date(metaRows[0].end_date);
+      endDate = new Date(metaRows[0].end_date);
     }
 
-    // 2. Load personalized overrides if user is logged in
-    let overrideRows = [];
+    // 2. Load user overrides if logged in
+    const overrideRows = [];
     if (userId) {
       const [ur] = await pool.query(
         `SELECT
@@ -96,16 +106,14 @@ exports.getWeeklySchedule = async (req, res) => {
          WHERE ups.user_id = ? AND ups.program_id = ?`,
         [userId, programId]
       );
-      overrideRows = ur;
+      overrideRows.push(...ur);
 
-      // 🆕 2.5 Load user name
+      // fetch name
       const [userRows] = await pool.query(
         'SELECT name FROM user_profile WHERE id = ?',
         [userId]
       );
-      if (userRows.length) {
-        userName = userRows[0].name;
-      }
+      if (userRows.length) userName = userRows[0].name;
     }
 
     // 3. Load default schedule
@@ -122,57 +130,56 @@ exports.getWeeklySchedule = async (req, res) => {
       [programId]
     );
 
-    // 4. Merge overrides into default structure
+    // 4. Map overrides for quick lookup
     const overrideMap = new Map();
     for (const row of overrideRows) {
-      const key = `${row.day}-${row.workout_id}`;
-      overrideMap.set(key, row);
+      overrideMap.set(`${row.day}-${row.workout_id}`, row);
     }
 
-    // 5. Format output by day
+    // 5. Assemble final by day
     const schedule = Object.entries(WEEKLY_WORKOUT_PLAN).map(([day, { label }]) => {
-      const dayRows = defaultRows.filter(r => r.day === day);
-
-      dayRows.sort((a, b) =>
-        a.type === 'Compound' && b.type !== 'Compound' ? -1 :
-        b.type === 'Compound' && a.type !== 'Compound' ?  1 : 0
-      );
+      // filter and sort
+      const dayRows = defaultRows
+        .filter(r => r.day === day)
+        .sort((a, b) => {
+          if (a.type === 'Compound' && b.type !== 'Compound') return -1;
+          if (b.type === 'Compound' && a.type !== 'Compound') return  1;
+          return 0;
+        });
 
       return {
         day,
         category: label,
         workouts: dayRows.map(r => {
           const key = `${r.day}-${r.workout_id}`;
-          const override = overrideMap.get(key);
-
+          const ov = overrideMap.get(key);
           return {
             name:     r.workout,
             category: r.category,
             type:     r.type,
-            sets:     override?.sets ?? null,
-            reps:     override?.reps ?? null,
-            weight:   override?.weight_value != null
-                      ? { value: override.weight_value, unit: override.weight_unit }
+            sets:     ov?.sets ?? null,
+            reps:     ov?.reps ?? null,
+            weight:   ov?.weight_value != null
+                      ? { value: ov.weight_value, unit: ov.weight_unit }
                       : null
           };
         })
       };
     });
 
-    // 6. Send response
+    // 6. Respond
     res.json({
       program_id:    programId,
       program_start: startDate.toISOString().split('T')[0],
       expires_on:    endDate.toISOString().split('T')[0],
-      user_name:     userName, // 🆕 include if available
+      user_name:     userName,
       schedule
     });
-
-  } catch (error) {
-    console.error('🔥 getWeeklySchedule Error:', error);
+  } catch (err) {
+    console.error('🔥 getWeeklySchedule Error:', err);
     res.status(500).json({
-      error: 'Could not load schedule',
-      details: error.message
+      error:   'Could not load schedule',
+      details: err.message
     });
   }
-};
+}

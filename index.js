@@ -1,11 +1,17 @@
 // index.js
-require('dotenv').config();
-const app = require('./app');
-const port = process.env.PORT || 3000;
+import dotenv from 'dotenv';
+dotenv.config();  // ← must come first
 
-// Optional health check
-app.get('/health', (_, res) => res.send('OK'));
+import app from './app.js';
 
-app.listen(port, () => {
-  console.log(`🚀 Server listening on http://localhost:${port}`);
+const PORT = process.env.PORT || 3000;
+
+// Fail fast if JWT_SECRET is missing
+if (!process.env.JWT_SECRET) {
+  console.error('❌ Missing JWT_SECRET in environment');
+  process.exit(1);
+}
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
