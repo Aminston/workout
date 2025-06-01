@@ -35,3 +35,10 @@ export const INJURY_AREAS = [
   { key: 'ankles', label: 'Ankles' },
   { key: 'hips', label: 'Hips' }
 ];
+
+export const MODIFICATION_TYPE = {
+  UNCHANGED: 'unchanged',
+  INCREASED: 'increased',
+  REDUCED: 'reduced',
+  MIXED: 'mixed'
+};

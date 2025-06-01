@@ -7,7 +7,7 @@ dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
- * POST /api/personalize/plan
+ * POST /personalize/plan
  */
 export async function personalizePlan(req, res) {
   const userId = req.user?.userId;
@@ -163,7 +163,7 @@ Rules:
 }
 
 /**
- * DELETE /api/personalize/reset
+ * DELETE /personalize/reset
  */
 export async function resetPersonalizedPlan(req, res) {
   const userId = req.user?.userId;

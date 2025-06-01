@@ -13,12 +13,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/api/auth', authRoutes);
-app.use('/api/personalize', aiRoutes);
-app.use('/api/user-profile', userProfileRoutes);
-app.use('/', scheduleRoutes);
+app.use('/auth', authRoutes);
+app.use('/personalize', aiRoutes);
+app.use('/user-profile', userProfileRoutes);
+app.use('/schedule', scheduleRoutes);
+
 
 app.use((req, res) => res.status(404).json({ error: 'Not Found' }));
 app.use(errorHandler);
 
 export default app;
+

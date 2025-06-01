@@ -7,10 +7,10 @@ import { getUserProfile, updateUserProfile } from '../controllers/userProfileCon
 
 const router = express.Router();
 
-// GET /api/user-profile - fetch current user's profile
+// GET /user-profile - fetch current user's profile
 router.get('/', authenticate, asyncHandler(getUserProfile));
 
-// PUT /api/user-profile - update current user's profile
+// PUT /user-profile - update current user's profile
 router.put('/', authenticate, asyncHandler(updateUserProfile));
 
 export default router;

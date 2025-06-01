@@ -1,5 +1,3 @@
-// src/middleware/auth.js
-
 import jwt from 'jsonwebtoken';
 
 /**
@@ -25,7 +23,7 @@ export default function authenticate(req, res, next) {
       return res.status(403).json({ error: 'Invalid token payload' });
     }
 
-    // Attach user info to request
+    // Attach userId to request
     req.user = { userId: decoded.userId };
     next();
   } catch (err) {

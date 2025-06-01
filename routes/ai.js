@@ -10,14 +10,14 @@ import {
 
 const router = express.Router();
 
-// POST /api/personalize/plan - generate a personalized workout plan
+// POST /personalize/plan - generate a personalized workout plan
 router.post(
   '/plan',
   authenticate,
   asyncHandler(personalizePlan)
 );
 
-// DELETE /api/personalize/reset - reset the personalized plan
+// DELETE /personalize/reset - reset the personalized plan
 router.delete(
   '/reset',
   authenticate,
