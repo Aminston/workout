@@ -220,13 +220,6 @@ export async function updateWorkoutModification(req, res) {
   }
 
   try {
-    console.log('[Querying user_program_schedule with]:', {
-      user_id: userId,
-      program_id,
-      workout_id,
-      day
-    });
-
     const [rows] = await pool.query(
       `SELECT sets, reps, weight_value, weight_unit 
        FROM user_program_schedule 
@@ -234,10 +227,7 @@ export async function updateWorkoutModification(req, res) {
       [userId, program_id, workout_id, day]
     );
 
-    console.log('[Query result rows]:', rows);
-
     if (rows.length === 0) {
-      console.warn('⚠️ No matching workout entry found in DB');
       return res.status(404).json({ error: 'Workout entry not found.' });
     }
 
@@ -248,10 +238,9 @@ export async function updateWorkoutModification(req, res) {
       weight_value: typeof weight_value === 'number' ? weight_value : original.weight_value
     };
 
+    const resolvedWeightUnit = typeof weight_unit === 'string' ? weight_unit : original.weight_unit;
     const modification_type = getModificationType(original, updated);
     const is_modified = modification_type !== MODIFICATION_TYPE.UNCHANGED ? 1 : 0;
-
-    console.log('[Modification Type]:', modification_type, '| [is_modified]:', is_modified);
 
     if (!is_modified) {
       return res.status(400).json({ error: 'No changes detected in sets, reps, or weight.' });
@@ -266,7 +255,7 @@ export async function updateWorkoutModification(req, res) {
         updated.sets,
         updated.reps,
         updated.weight_value,
-        typeof weight_unit === 'string' ? weight_unit : original.weight_unit,
+        resolvedWeightUnit,
         modification_type,
         userId,
         program_id,
@@ -275,21 +264,48 @@ export async function updateWorkoutModification(req, res) {
       ]
     );
 
-    console.log('✅ Workout updated successfully');
+    // Fetch the updated workout info
+    const [workoutRow] = await pool.query(
+      `SELECT w.id AS workout_id, w.name, w.category, w.type,
+              ups.sets_modified AS sets, ups.reps_modified AS reps,
+              ups.weight_modified AS weight_value, ups.weight_unit,
+              ups.is_modified
+       FROM user_program_schedule ups
+       JOIN workouts w ON ups.workout_id = w.id
+       WHERE ups.user_id = ? AND ups.program_id = ? AND ups.workout_id = ? AND ups.day = ?`,
+      [userId, program_id, workout_id, day]
+    );
+
+    if (!workoutRow.length) {
+      return res.status(500).json({ error: 'Workout updated but could not fetch full data.' });
+    }
+
+    const updatedWorkout = {
+      workout_id: workoutRow[0].workout_id,
+      name: workoutRow[0].name,
+      category: workoutRow[0].category,
+      type: workoutRow[0].type,
+      sets: workoutRow[0].sets,
+      reps: workoutRow[0].reps,
+      weight: {
+        value: workoutRow[0].weight_value,
+        unit: workoutRow[0].weight_unit
+      },
+      is_modified: !!workoutRow[0].is_modified,
+      day
+    };
+
     return res.status(200).json({
       success: true,
-      modification_type,
-      is_modified: 1,
-      sets_modified: updated.sets,
-      reps_modified: updated.reps,
-      weight_modified: updated.weight_value,
-      weight_unit: typeof weight_unit === 'string' ? weight_unit : original.weight_unit
+      updatedWorkout
     });
+
   } catch (err) {
     console.error('🔥 Error updating workout modification:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
 
 
 
